@@ -139,6 +139,48 @@ func applyExternalForces(p * particle, c constants) {
     p.velocity.add(c.g.multiplyF(c.timeStep))
 }
 
+func doubleDensity(c constants, this int, neighbours []int, positions []vector2) {
+    density := 0.0
+    nearDensity := 0.0
+
+    for _, neighbour := range neighbours {
+        if this == neighbour {
+            continue
+        }
+        q := distSq(positions[this], positions[neighbour]) / (c.h * c.h)
+        if q < 1.0 {
+            density += (1.0 - q) * (1.0 - q)
+            nearDensity += (1.0 - q) * (1.0 - q) * (1.0 - q)
+        }
+    }
+
+    pressure := c.k * (density - c.density0)
+    nearPressure := c.kNear * nearDensity
+
+    deltaX := vector2{x : 0.0, y : 0.0}
+
+    for _, neighbour := range neighbours {
+        if this == neighbour {
+            continue
+        }
+        q := distSq(positions[this], positions[neighbour]) / (c.h * c.h)
+        if q > 1.0 {
+            pressureTerm := pressure * (1.0 - q)
+            nearPressureTerm := nearPressure * (1.0 - q) * (1.0 - q)
+
+            D := unitVec(positions[this], positions[neighbour])
+            D.multiplyF(c.timeStep * c.timeStep * (pressureTerm + nearPressureTerm))
+
+            positions[neighbour].add(D.multiplyF(0.5))
+            deltaX.subtract(D.multiplyF(0.5))
+        }
+    }
+
+    positions[this].add(deltaX)
+
+}
+
+
 func main() {
 
     point1 := vector2{x : 3.0, y : 2.0}
