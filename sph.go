@@ -180,6 +180,34 @@ func doubleDensity(c constants, this int, neighbours []int, positions []vector2)
 
 }
 
+func viscosity(c constants, positions []vector2, velocities []vector2, neighboursArray [][]int) {
+
+    for i, _ := range neighboursArray {
+        for _, j := range neighboursArray[i] {
+
+            if j >= i {
+                break
+            }
+
+            q := distSq(positions[i], positions[j]) / (c.h * c.h)
+
+            if q < 1 {
+                u := velocities[i].minus(velocities[j])
+                u = u.multiply(unitVec(positions[i], positions[j]))
+                magU := u.mag()
+
+                if magU > 0 {
+                    V := unitVec(positions[i], positions[j])
+                    V = V.multiplyF(c.timeStep * (1.0 - q) * (c.sigma * magU + c.beta * magU * magU))
+                    velocities[i].add(V.multiplyF(0.5))
+                    velocities[j].subtract(V.multiplyF(0.5))
+                } // magU > 0?
+            } // q < 1?
+
+        } // End loop over j
+    } // End loop over i
+
+}
 
 func main() {
 
