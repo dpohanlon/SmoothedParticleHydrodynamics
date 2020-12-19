@@ -139,7 +139,7 @@ func applyExternalForces(p * particle, c constants) {
     p.velocity.add(c.g.multiplyF(c.timeStep))
 }
 
-func doubleDensity(c constants, this int, neighbours []int, positions []vector2) {
+func doubleDensity(c constants, this int, neighbours []int, particles []particle) {
     density := 0.0
     nearDensity := 0.0
 
@@ -147,7 +147,7 @@ func doubleDensity(c constants, this int, neighbours []int, positions []vector2)
         if this == neighbour {
             continue
         }
-        q := distSq(positions[this], positions[neighbour]) / (c.h * c.h)
+        q := distSq(particles[this].position, particles[neighbour].position) / (c.h * c.h)
         if q < 1.0 {
             density += (1.0 - q) * (1.0 - q)
             nearDensity += (1.0 - q) * (1.0 - q) * (1.0 - q)
@@ -163,24 +163,25 @@ func doubleDensity(c constants, this int, neighbours []int, positions []vector2)
         if this == neighbour {
             continue
         }
-        q := distSq(positions[this], positions[neighbour]) / (c.h * c.h)
+        q := distSq(particles[this].position, particles[neighbour].position) / (c.h * c.h)
         if q > 1.0 {
             pressureTerm := pressure * (1.0 - q)
             nearPressureTerm := nearPressure * (1.0 - q) * (1.0 - q)
 
-            D := unitVec(positions[this], positions[neighbour])
+            D := unitVec(particles[this].position, particles[neighbour].position)
             D.multiplyF(c.timeStep * c.timeStep * (pressureTerm + nearPressureTerm))
 
-            positions[neighbour].add(D.multiplyF(0.5))
+            particles[neighbour].position.add(D.multiplyF(0.5))
             deltaX.subtract(D.multiplyF(0.5))
-        }
-    }
 
-    positions[this].add(deltaX)
+        } // q > 1.0?
+    } // End neighbour loop
+
+    particles[this].position.add(deltaX)
 
 }
 
-func viscosity(c constants, positions []vector2, velocities []vector2, neighboursArray [][]int) {
+func viscosity(c constants, particles []particle, neighboursArray [][]int) {
 
     for i, _ := range neighboursArray {
         for _, j := range neighboursArray[i] {
@@ -189,24 +190,37 @@ func viscosity(c constants, positions []vector2, velocities []vector2, neighbour
                 break
             }
 
-            q := distSq(positions[i], positions[j]) / (c.h * c.h)
+            q := distSq(particles[i].position, particles[j].position) / (c.h * c.h)
 
             if q < 1 {
-                u := velocities[i].minus(velocities[j])
-                u = u.multiply(unitVec(positions[i], positions[j]))
+                u := particles[i].velocity.minus(particles[j].velocity)
+                u = u.multiply(unitVec(particles[i].position, particles[j].position))
                 magU := u.mag()
 
                 if magU > 0 {
-                    V := unitVec(positions[i], positions[j])
+                    V := unitVec(particles[i].position, particles[j].position)
                     V = V.multiplyF(c.timeStep * (1.0 - q) * (c.sigma * magU + c.beta * magU * magU))
-                    velocities[i].add(V.multiplyF(0.5))
-                    velocities[j].subtract(V.multiplyF(0.5))
+
+                    particles[i].velocity.add(V.multiplyF(0.5))
+                    particles[j].velocity.subtract(V.multiplyF(0.5))
+
                 } // magU > 0?
             } // q < 1?
 
         } // End loop over j
     } // End loop over i
 
+}
+
+func update(particles []particle, neighboursArray [][]int, c constants) {
+
+    for _, p := range particles { applyExternalForces(&p, c) }
+
+    viscosity(c, particles, neighboursArray)
+
+    for _, p := range particles { p.integrate(c.timeStep) }
+
+    // for _, n := range neighboursArray { doubleDensity }
 }
 
 func main() {
