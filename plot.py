@@ -59,7 +59,7 @@ xmin, ymin = 0, 0 #data.min(axis=(0, 1))
 xmax, ymax = 10, 10 #data.max(axis=(0, 1))
 
 grid_size = 200                      # number of pixels along x and y
-sigma     = (xmax - xmin) / 20.0     # std-dev of the Gaussian kernel
+sigma     = (xmax - xmin) / 25.0     # std-dev of the Gaussian kernel
 
 x_lin = np.linspace(xmin, xmax, grid_size)
 y_lin = np.linspace(ymin, ymax, grid_size)
