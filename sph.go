@@ -1,9 +1,3 @@
-// Smoothed-Particle Hydrodynamics demo (Position-Based Fluids variant)
-// --------------------------------------------------------------------
-// Single-file implementation with simple axis-aligned box boundaries.
-// Wall-friction and stronger XSPH viscosity have been added to stop the
-// bottom layer of particles from skating back and forth indefinitely.
-
 package main
 
 import (
@@ -14,10 +8,6 @@ import (
 	"os"
 	"time"
 )
-
-/*-------------------------------------------------------------------------*/
-/*  Basic types                                                            */
-/*-------------------------------------------------------------------------*/
 
 type vector2 struct{ x, y float64 }
 
@@ -41,10 +31,6 @@ func (v *vector2) divideSafeF(s float64) vector2 { // same as divideF but guarde
 type particle struct {
 	position, velocity, previousPosition vector2
 }
-
-/*-------------------------------------------------------------------------*/
-/*  Simulation constants                                                   */
-/*-------------------------------------------------------------------------*/
 
 type constants struct {
 	g vector2
@@ -84,10 +70,6 @@ func spikyGrad(r float64, dir vector2, h float64) vector2 {
 	return dir.multiplyF(f)
 }
 
-/*-------------------------------------------------------------------------*/
-/*  Bounding box with wall-friction                                        */
-/*-------------------------------------------------------------------------*/
-
 type boundingBox struct{ top, left, bottom, right float64 }
 
 func (bb *boundingBox) collide(p *particle, c constants) {
@@ -120,10 +102,6 @@ func (bb *boundingBox) collide(p *particle, c constants) {
 	}
 }
 
-/*-------------------------------------------------------------------------*/
-/*  Helpers                                                                */
-/*-------------------------------------------------------------------------*/
-
 func distSq(a, b vector2) float64 {
 	dx, dy := a.x-b.x, a.y-b.y
 	return dx*dx + dy*dy
@@ -135,10 +113,6 @@ func unitVec(a, b vector2) vector2 {
 	return d.divideSafeF(d.mag())
 }
 
-/*-------------------------------------------------------------------------*/
-/*  Particle methods                                                       */
-/*-------------------------------------------------------------------------*/
-
 func (p *particle) updateVelocity(dt float64) {
 	diff := p.position.minus(p.previousPosition)
 	p.velocity = diff.divideSafeF(dt)
@@ -147,100 +121,6 @@ func (p *particle) integrate(dt float64) {
 	p.previousPosition = p.position
 	p.position.add(p.velocity.multiplyF(dt))
 }
-
-/*-------------------------------------------------------------------------*/
-/*  External forces                                                        */
-/*-------------------------------------------------------------------------*/
-
-func applyExternalForces(p *particle, c constants) {
-	p.velocity.add(c.g.multiplyF(c.timeStep))
-}
-
-/*-------------------------------------------------------------------------*/
-/*  Double-density relaxation (PBF)                                        */
-/*-------------------------------------------------------------------------*/
-
-func doubleDensity(c constants, i int, neigh []int, particles []particle) {
-	var density, nearDensity float64
-
-	for _, j := range neigh {
-		if i == j {
-			continue
-		}
-		q := dist(particles[i].position, particles[j].position) / c.h
-		if q < 1.0 {
-			density += (1 - q) * (1 - q)
-			nearDensity += (1 - q) * (1 - q) * (1 - q)
-		}
-	}
-
-	pressure := c.k * (density - c.density0)
-	nearPressure := c.kNear * nearDensity
-
-	delta := vector2{}
-	for _, j := range neigh {
-		if i == j {
-			continue
-		}
-		q := dist(particles[i].position, particles[j].position) / c.h
-		if q >= 1.0 {
-			continue
-		}
-
-		dir := unitVec(particles[i].position, particles[j].position)
-		D := dir.multiplyF(c.timeStep * c.timeStep *
-			(pressure*(1-q) + nearPressure*(1-q)*(1-q)))
-
-		if m := D.mag(); m > 0.5*c.h {
-			D = D.divideF(m).multiplyF(0.5 * c.h) // clamp
-		}
-
-		particles[j].position.add(D.multiplyF(0.5))
-		delta.subtract(D.multiplyF(0.5))
-	}
-	particles[i].position.add(delta)
-}
-
-func sphPressure(particles []particle, neigh [][]int, c constants, mass float64) {
-	N := len(particles)
-	rho := make([]float64, N)
-
-	// 1. density = Σ m W_poly6
-	for i := 0; i < N; i++ {
-		rho[i] += mass * poly6(0, c.h) // self-contribution
-		for _, j := range neigh[i] {
-			r2 := distSq(particles[i].position, particles[j].position)
-			w := mass * poly6(r2, c.h)
-			rho[i] += w
-			rho[j] += w // symmetry
-		}
-	}
-
-	// 2. pressure force using Spiky gradient
-	for i := 0; i < N; i++ {
-		pi := particles[i]
-		piP := c.k * (rho[i] - c.density0) // simple ideal-gas law
-
-		for _, j := range neigh[i] {
-			if j <= i {
-				continue // handled in the opposite pair
-			}
-			pj := particles[j]
-			r := dist(pi.position, pj.position)
-			dir := unitVec(pi.position, pj.position)
-
-			pjP := c.k * (rho[j] - c.density0)
-			force := spikyGrad(r, dir, c.h).multiplyF(mass * (piP + pjP) / 2.0)
-
-			particles[i].velocity.subtract(force.multiplyF(c.timeStep / rho[i]))
-			particles[j].velocity.add(force.multiplyF(c.timeStep / rho[j]))
-		}
-	}
-}
-
-/*-------------------------------------------------------------------------*/
-/*  XSPH viscosity                                                         */
-/*-------------------------------------------------------------------------*/
 
 func viscosity(c constants, particles []particle, neigh [][]int) {
 	for i := range neigh {
@@ -268,10 +148,6 @@ func viscosity(c constants, particles []particle, neigh [][]int) {
 	}
 }
 
-/*-------------------------------------------------------------------------*/
-/*  Neighbour search (naïve O(N²))                                         */
-/*-------------------------------------------------------------------------*/
-
 func neighbours(particles []particle, h float64) [][]int {
 	N := len(particles)
 	out := make([][]int, N)
@@ -292,7 +168,6 @@ func sphPressureAccel(acc []vector2, p []particle, neigh [][]int, c constants, m
 	rho := make([]float64, N)
 	P := make([]float64, N)
 
-	/* 1 density */
 	for i := 0; i < N; i++ {
 		rho[i] += m * poly6(0, c.h)
 		for _, j := range neigh[i] {
@@ -303,12 +178,11 @@ func sphPressureAccel(acc []vector2, p []particle, neigh [][]int, c constants, m
 		}
 	}
 
-	/* 2 pressure from Tait EOS (simple ideal gas) */
+	/* pressure from Tait EOS (simple ideal gas) */
 	for i := 0; i < N; i++ {
 		P[i] = c.k * (rho[i] - c.density0)
 	}
 
-	/* 3 acceleration = Σ … */
 	for i := 0; i < N; i++ {
 		for _, j := range neigh[i] {
 			if j <= i {
@@ -325,40 +199,27 @@ func sphPressureAccel(acc []vector2, p []particle, neigh [][]int, c constants, m
 	}
 }
 
-/*-------------------------------------------------------------------------*/
-/*  Simulation step                                                        */
-/*-------------------------------------------------------------------------*/
-
 func update(p []particle, bb *boundingBox, c constants) {
 
 	neigh := neighbours(p, c.h)
 
-	// one acceleration array reused
 	acc := make([]vector2, len(p))
 
-	/* 1 External accel (gravity) */
 	for i := range p {
 		acc[i] = c.g
 	}
 
-	/* 2 Pressure accel */
 	sphPressureAccel(acc, p, neigh, c, 1.0) // mass = 1
 
-	/* 3 XSPH viscosity (writes directly in velocity) */
 	viscosity(c, p, neigh)
 
-	/* 4 Symplectic Euler integration */
 	for i := range p {
-		p[i].velocity.add(acc[i].multiplyF(c.timeStep)) // v = v + a dt
-		p[i].integrate(c.timeStep)                      // x = x + v dt
+		p[i].velocity.add(acc[i].multiplyF(c.timeStep))
+		p[i].integrate(c.timeStep)
 		bb.collide(&p[i], c)
 		p[i].updateVelocity(c.timeStep)
 	}
 }
-
-/*-------------------------------------------------------------------------*/
-/*  I/O helper                                                             */
-/*-------------------------------------------------------------------------*/
 
 func savePositions(filename string, particles []particle) error {
 	f, err := os.Create(filename)
@@ -374,10 +235,6 @@ func savePositions(filename string, particles []particle) error {
 	return w.Flush()
 }
 
-/*-------------------------------------------------------------------------*/
-/*  Main                                                                    */
-/*-------------------------------------------------------------------------*/
-
 func main() {
 	rand.Seed(time.Now().UnixNano())
 
@@ -386,9 +243,9 @@ func main() {
 		epsilon:      1e-3,
 		damping:      0.25,
 		h:            0.6,
-		density0:     4.0,    // as before
-		k:            30.0,   // was 200
-		timeStep:     0.0005, // half the old step
+		density0:     4.0,
+		k:            30.0,
+		timeStep:     0.0005,
 		sigma:        0.04,
 		beta:         0.00,
 		wallFriction: 0.5,
@@ -396,7 +253,6 @@ func main() {
 
 	bb := boundingBox{top: 10, bottom: 0, left: 0, right: 10}
 
-	/*  initial particle block  */
 	N := 1000
 	particles := make([]particle, N)
 	for i := 0; i < N; i++ {
@@ -405,7 +261,6 @@ func main() {
 		particles[i].previousPosition = particles[i].position
 	}
 
-	/*  run  */
 	steps := 20000
 	if err := os.MkdirAll("out", 0o755); err != nil && !os.IsExist(err) {
 		panic(err)
