@@ -141,8 +141,8 @@ anim = FuncAnimation(
     update,
     frames=F,
     init_func=init,
-    blit=True,
-    interval=40,         # ~25 fps
+    # blit=True,
+    # interval=30,         # ~25 fps
 )
 
 pbar = tqdm(total=F, desc="Encoding frames")
@@ -155,7 +155,7 @@ def _progress(frame_number, total):
 # -----------------------------------------------------------------------------
 output = Path("density.mp4")
 print(f"Writing {output} ...")
-writer = FFMpegWriter(fps=25)#, codec="libx264", bitrate=1800)
+writer = FFMpegWriter(fps=30)#, codec="libx264", bitrate=1800)
 anim.save(output, writer=writer, dpi=150, progress_callback=_progress)
 pbar.close()
 print("Done.")

@@ -62,6 +62,28 @@ type constants struct {
 	wallFriction float64 // 0 → stick, 1 → fully slippery
 }
 
+// ------------------------------------------------------------------
+// 2-D Poly6 kernel and Spiky gradient (monomial form)
+// W_poly6(r,h)  = (4/π h⁸) (h²−r²)³           for 0 ≤ r ≤ h
+// ∇W_spiky      = −(10/π h⁵) (h−r)²  r̂        for 0 ≤ r ≤ h
+// ------------------------------------------------------------------
+
+func poly6(r2, h float64) float64 {
+	if r2 >= h*h {
+		return 0
+	}
+	inv := (h*h - r2)
+	return (4.0 / (math.Pi * math.Pow(h, 8))) * inv * inv * inv
+}
+
+func spikyGrad(r float64, dir vector2, h float64) vector2 {
+	if r == 0 || r >= h {
+		return vector2{}
+	}
+	f := -10.0 / (math.Pi * math.Pow(h, 5)) * (h - r) * (h - r)
+	return dir.multiplyF(f)
+}
+
 /*-------------------------------------------------------------------------*/
 /*  Bounding box with wall-friction                                        */
 /*-------------------------------------------------------------------------*/
@@ -179,6 +201,43 @@ func doubleDensity(c constants, i int, neigh []int, particles []particle) {
 	particles[i].position.add(delta)
 }
 
+func sphPressure(particles []particle, neigh [][]int, c constants, mass float64) {
+	N := len(particles)
+	rho := make([]float64, N)
+
+	// 1. density = Σ m W_poly6
+	for i := 0; i < N; i++ {
+		rho[i] += mass * poly6(0, c.h) // self-contribution
+		for _, j := range neigh[i] {
+			r2 := distSq(particles[i].position, particles[j].position)
+			w := mass * poly6(r2, c.h)
+			rho[i] += w
+			rho[j] += w // symmetry
+		}
+	}
+
+	// 2. pressure force using Spiky gradient
+	for i := 0; i < N; i++ {
+		pi := particles[i]
+		piP := c.k * (rho[i] - c.density0) // simple ideal-gas law
+
+		for _, j := range neigh[i] {
+			if j <= i {
+				continue // handled in the opposite pair
+			}
+			pj := particles[j]
+			r := dist(pi.position, pj.position)
+			dir := unitVec(pi.position, pj.position)
+
+			pjP := c.k * (rho[j] - c.density0)
+			force := spikyGrad(r, dir, c.h).multiplyF(mass * (piP + pjP) / 2.0)
+
+			particles[i].velocity.subtract(force.multiplyF(c.timeStep / rho[i]))
+			particles[j].velocity.add(force.multiplyF(c.timeStep / rho[j]))
+		}
+	}
+}
+
 /*-------------------------------------------------------------------------*/
 /*  XSPH viscosity                                                         */
 /*-------------------------------------------------------------------------*/
@@ -228,36 +287,70 @@ func neighbours(particles []particle, h float64) [][]int {
 	return out
 }
 
+func sphPressureAccel(acc []vector2, p []particle, neigh [][]int, c constants, m float64) {
+	N := len(p)
+	rho := make([]float64, N)
+	P := make([]float64, N)
+
+	/* 1 density */
+	for i := 0; i < N; i++ {
+		rho[i] += m * poly6(0, c.h)
+		for _, j := range neigh[i] {
+			r2 := distSq(p[i].position, p[j].position)
+			w := m * poly6(r2, c.h)
+			rho[i] += w
+			rho[j] += w
+		}
+	}
+
+	/* 2 pressure from Tait EOS (simple ideal gas) */
+	for i := 0; i < N; i++ {
+		P[i] = c.k * (rho[i] - c.density0)
+	}
+
+	/* 3 acceleration = Σ … */
+	for i := 0; i < N; i++ {
+		for _, j := range neigh[i] {
+			if j <= i {
+				continue
+			}
+			r := dist(p[i].position, p[j].position)
+			dir := unitVec(p[i].position, p[j].position)
+			grad := spikyGrad(r, dir, c.h)
+
+			f := grad.multiplyF(m * (P[i]/(rho[i]*rho[i]) + P[j]/(rho[j]*rho[j])))
+			acc[i].subtract(f.divideF(m)) // a_i -= f / m
+			acc[j].add(f.divideF(m))      // a_j += f / m
+		}
+	}
+}
+
 /*-------------------------------------------------------------------------*/
 /*  Simulation step                                                        */
 /*-------------------------------------------------------------------------*/
 
 func update(p []particle, bb *boundingBox, c constants) {
 
-	// 1  external forces
+	neigh := neighbours(p, c.h)
+
+	// one acceleration array reused
+	acc := make([]vector2, len(p))
+
+	/* 1 External accel (gravity) */
 	for i := range p {
-		applyExternalForces(&p[i], c)
+		acc[i] = c.g
 	}
 
-	// 2  viscosity
-	neigh := neighbours(p, c.h)
+	/* 2 Pressure accel */
+	sphPressureAccel(acc, p, neigh, c, 1.0) // mass = 1
+
+	/* 3 XSPH viscosity (writes directly in velocity) */
 	viscosity(c, p, neigh)
 
-	// 3  predict positions
+	/* 4 Symplectic Euler integration */
 	for i := range p {
-		p[i].integrate(c.timeStep)
-	}
-
-	// 4  density / pressure (4 passes, neighbour list refreshed)
-	for pass := 0; pass < 4; pass++ {
-		neigh = neighbours(p, c.h)
-		for i := range p {
-			doubleDensity(c, i, neigh[i], p)
-		}
-	}
-
-	// 5  collisions & velocity update
-	for i := range p {
+		p[i].velocity.add(acc[i].multiplyF(c.timeStep)) // v = v + a dt
+		p[i].integrate(c.timeStep)                      // x = x + v dt
 		bb.collide(&p[i], c)
 		p[i].updateVelocity(c.timeStep)
 	}
@@ -293,19 +386,18 @@ func main() {
 		epsilon:      1e-3,
 		damping:      0.25,
 		h:            0.6,
-		k:            0.005,
-		kNear:        0.020,
-		density0:     4.0,
-		timeStep:     0.001,
-		sigma:        0.10, // stronger linear viscosity
-		beta:         0.00, // no quadratic term
-		wallFriction: 0.5,  // lose 50 % tangential speed at walls
+		density0:     4.0,    // as before
+		k:            30.0,   // was 200
+		timeStep:     0.0005, // half the old step
+		sigma:        0.04,
+		beta:         0.00,
+		wallFriction: 0.5,
 	}
 
 	bb := boundingBox{top: 10, bottom: 0, left: 0, right: 10}
 
 	/*  initial particle block  */
-	N := 500
+	N := 1000
 	particles := make([]particle, N)
 	for i := 0; i < N; i++ {
 		particles[i].position = vector2{x: math.Mod(1+float64(i)*0.5, 10), y: 8}
@@ -314,14 +406,14 @@ func main() {
 	}
 
 	/*  run  */
-	steps := 10000
+	steps := 20000
 	if err := os.MkdirAll("out", 0o755); err != nil && !os.IsExist(err) {
 		panic(err)
 	}
 	for s := 0; s < steps; s++ {
 		update(particles, &bb, c)
 		if s%10 == 0 {
-			if err := savePositions(fmt.Sprintf("out/positions_%04d.csv", s), particles); err != nil {
+			if err := savePositions(fmt.Sprintf("out/positions_%06d.csv", s), particles); err != nil {
 				panic(err)
 			}
 		}
